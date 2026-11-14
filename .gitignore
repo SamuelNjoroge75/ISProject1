@@ -1,0 +1,6 @@
+# Secrets: never commit these
+config.php
+.env
+*.pem
+*.key
+*.sql.gz
