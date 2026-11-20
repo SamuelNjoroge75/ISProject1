@@ -291,8 +291,7 @@ function page_header(string $title): void {
 }
 
 function page_footer(): void {
-    echo '</main><footer><p>ISProject1 &middot; Server Administration project</p>';
-    echo '<p class="hint">Psst&hellip; try the Konami code: &uarr; &uarr; &darr; &darr; &larr; &rarr; &larr; &rarr; B A</p></footer>';
+    echo '</main><footer><p>ISProject1 &middot; Server Administration project</p></footer>';
     echo '<script src="ui.js" defer></script></body></html>';
 }
 
