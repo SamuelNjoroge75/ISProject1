@@ -141,6 +141,29 @@ function is_locked(string $username, string $ip): bool {
     return $userFails >= MAX_FAILS || $ipFails >= MAX_IP_FAILS;
 }
 
+/** Seconds until the lock ends (0 if not locked). Used for the friendly countdown. */
+function lock_seconds_left(string $username, string $ip): int {
+    $left = 0;
+    // The lock ends when the Nth most recent failure is older than LOCK_MINUTES.
+    $checks = [['username', $username, MAX_FAILS], ['ip', $ip, MAX_IP_FAILS]];
+    foreach ($checks as [$col, $value, $max]) {
+        $offset = $max - 1;                 // fixed integers and column names only
+        $sql = 'SELECT TIMESTAMPDIFF(SECOND, NOW(), attempted_at + INTERVAL ' . LOCK_MINUTES . ' MINUTE)
+                  FROM login_attempts
+                 WHERE success = 0 AND ' . $col . ' = ?
+                 ORDER BY id DESC LIMIT 1 OFFSET ' . $offset;
+        $stmt = db()->prepare($sql);
+        $stmt->bind_param('s', $value);
+        $stmt->execute();
+        $stmt->bind_result($diff);
+        if ($stmt->fetch() && $diff !== null) {
+            $left = max($left, (int)$diff);
+        }
+        $stmt->close();
+    }
+    return $left;
+}
+
 function log_attempt(string $username, string $ip, bool $success): void {
     // Keep the log clean: printable ASCII only, at most 30 characters (no mbstring needed)
     $username = substr((string)preg_replace('/[^\x20-\x7E]/', '?', $username), 0, 30);
@@ -160,6 +183,7 @@ function current_user(): ?array {
         'id'       => (int)$_SESSION['user_id'],
         'username' => (string)$_SESSION['username'],
         'role'     => (string)($_SESSION['role'] ?? 'user'),
+        'dept'     => (string)($_SESSION['dept'] ?? ''),
     ];
 }
 
@@ -192,14 +216,64 @@ function require_admin(): array {
     return $user;
 }
 
+/* ---------- Departments (names and ids come from the database, looks live here) ---------- */
+function department_meta(): array {
+    return [
+        'software' => ['emoji' => '&#128187;', 'blurb' => 'Where the code gets written.',
+                       'hint' => 'Tools, code reviews, deadlines, deployments...'],
+        'support'  => ['emoji' => '&#128736;&#65039;', 'blurb' => 'Keeping everyone online and happy.',
+                       'hint' => 'Ticket workload, equipment, on-call hours...'],
+        'security' => ['emoji' => '&#128737;&#65039;', 'blurb' => 'Guarding the castle.',
+                       'hint' => 'Training, tools, incident response...'],
+        'data'     => ['emoji' => '&#128202;', 'blurb' => 'Turning numbers into answers.',
+                       'hint' => 'Data access, dashboards, tooling...'],
+        'sales'    => ['emoji' => '&#128227;', 'blurb' => 'Telling our story to the world.',
+                       'hint' => 'Targets, leads, campaign support...'],
+        'hr'       => ['emoji' => '&#129309;', 'blurb' => 'People first, always.',
+                       'hint' => 'Onboarding, benefits, culture...'],
+        'finance'  => ['emoji' => '&#128176;', 'blurb' => 'Making the numbers add up.',
+                       'hint' => 'Processes, approvals, reporting tools...'],
+    ];
+}
+
+/** All departments keyed by slug: id, slug, name (from the database) plus emoji, blurb, hint. */
+function departments(): array {
+    static $list = null;
+    if ($list === null) {
+        $meta = department_meta();
+        $rows = db()->query('SELECT id, slug, name FROM departments ORDER BY id')->fetch_all(MYSQLI_ASSOC);
+        $list = [];
+        foreach ($rows as $row) {
+            $m = $meta[$row['slug']] ?? ['emoji' => '&#127970;', 'blurb' => '', 'hint' => 'Tell us what would make things better.'];
+            $list[$row['slug']] = ['id' => (int)$row['id'], 'slug' => $row['slug'], 'name' => $row['name']] + $m;
+        }
+    }
+    return $list;
+}
+
+/** Colourful radio chips used on the signup and login forms. */
+function department_picker(string $selected = ''): string {
+    $html = '<fieldset class="dept-picker"><legend>Your department</legend><div class="chips">';
+    foreach (departments() as $d) {
+        $checked = ($d['slug'] === $selected) ? ' checked' : '';
+        $html .= '<label class="chip dept-' . e($d['slug']) . '"><input type="radio" name="department" value="'
+               . e($d['slug']) . '" required' . $checked . '><span>' . $d['emoji'] . ' ' . e($d['name']) . '</span></label>';
+    }
+    return $html . '</div></fieldset>';
+}
+
 /* ---------- Page layout ---------- */
 function page_header(string $title): void {
     $user = current_user();
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">';
     echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
     echo '<title>' . e($title) . ' | ISProject1</title>';
-    echo '<link rel="stylesheet" href="style.css"></head><body>';
-    echo '<header><a class="brand" href="index.php">ISProject1</a><nav>';
+    echo '<link rel="icon" href="logo.svg" type="image/svg+xml">';
+    echo '<link rel="stylesheet" href="style.css">';
+    echo '<script src="theme.js"></script></head><body>';
+    echo '<a class="skip" href="#main">Skip to content</a>';
+    echo '<header><a class="brand" href="index.php"><img class="logo" src="logo.svg" alt="" width="28" height="28">ISProject1</a>';
+    echo '<div class="header-right"><nav aria-label="Main">';
     if ($user) {
         echo '<a href="dashboard.php">Dashboard</a>';
         if ($user['role'] === 'admin') {
@@ -211,11 +285,15 @@ function page_header(string $title): void {
     } else {
         echo '<a href="login.php">Log in</a><a href="signup.php">Sign up</a><a href="status.php">Status</a>';
     }
-    echo '</nav></header><main>';
+    echo '</nav><div class="theme-switch" role="group" aria-label="Appearance">';
+    echo '<button type="button" class="mode" id="mode-toggle" aria-label="Switch between light and dark mode" title="Light / dark">&#127769;</button>';
+    echo '</div></div></header><main id="main">';
 }
 
 function page_footer(): void {
-    echo '</main></body></html>';
+    echo '</main><footer><p>ISProject1 &middot; Server Administration project</p>';
+    echo '<p class="hint">Psst&hellip; try the Konami code: &uarr; &uarr; &darr; &darr; &larr; &rarr; &larr; &rarr; B A</p></footer>';
+    echo '<script src="ui.js" defer></script></body></html>';
 }
 
 /* ---------- Runs on every page that includes this file ---------- */

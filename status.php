@@ -31,6 +31,11 @@ if (($_GET['format'] ?? '') === 'json') {
 page_header('Status');
 ?>
 <h1>System status</h1>
+<?php if ($dbOk): ?>
+  <div class="notice ok">&#127881; All systems go!</div>
+<?php else: ?>
+  <div class="notice error" role="alert">&#128679; The database is not answering right now.</div>
+<?php endif; ?>
 <div class="table-wrap"><table>
   <tr><th>Component</th><th>State</th></tr>
   <tr><td>Web application</td><td><span class="badge good">Operational</span></td></tr>
